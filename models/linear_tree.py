@@ -46,7 +46,7 @@ class LinearTree(object):
         Loss function that is used for Gradient Boosting models to calculate impurity.
     """
     def __init__(self, min_samples_split=2, min_r2_gain=0, seed=2023,
-                 alpha = 1, max_depth=float("inf"), loss=None):
+                 alpha = 1, lam = 1, depth_shrink = 0, max_depth=float("inf"), loss=None):
         self.root = None
         self.min_samples_split = min_samples_split
         self.min_r2_gain = min_r2_gain
@@ -54,6 +54,8 @@ class LinearTree(object):
         self.loss = loss
         self.seed = seed 
         self.alpha = alpha
+        self.lam = lam
+        self.depth_shrink = depth_shrink
         self.feature_indices = None
         self.sample_indices = None
     
@@ -100,6 +102,7 @@ class LinearTree(object):
         cur_rss = self.rss(X, y, cur_beta)
         
         self.root = self._build_tree(X, y, cur_beta, cur_rss)
+        self._shrink_tree()
         self.loss=None
 
     def _build_tree(self, X, y, cur_beta, cur_rss, current_depth=0):
@@ -174,7 +177,7 @@ class LinearTree(object):
             # print(f'current depth: {current_depth}')
             
             if r2_gain > self.min_r2_gain:
-                print(best_criteria['threshold'])
+                #print(r2_gain)
                 true_branch = self._build_tree(best_sets["leftX"], best_sets["lefty"], best_sets['leftBeta'], best_sets['leftRSS'], current_depth + 1)
                 false_branch = self._build_tree(best_sets["rightX"], best_sets["righty"], best_sets['rightBeta'], best_sets['rightRSS'], current_depth + 1)
 
@@ -221,83 +224,19 @@ class LinearTree(object):
         #print('individ predicts')
         y_pred = [self.predict_value(sample, linear_honesty = linear_honesty) for sample in X]
         return y_pred
-    
-    def calculate_oobr2(self, Xy_oob, tree=None):
 
-        if tree is None:
-            tree = self.root
-        is_leaf = tree.true_branch is None
+    def _shrink_tree(self, tree=None, local=None, parent_val=None, parent_beta=None, parent_num=None, cum_sum=0, cum_beta = np.array([]), depth=None):
         
-        #calculate oob r2
-        
-        X_oob = Xy_oob[:, :-1]
-        y_oob = Xy_oob[:, -1]
-        
-        oobr2 = 1-(self.rss(X_oob, y_oob, tree.beta)/(np.sum((y_oob-np.mean(y_oob))**2) + 0.01))
-        
-        tree.oobr2 = min(0.999, max(0.001, oobr2))
-        
-        if not is_leaf:
-            split_idxs = Xy_oob[:, tree.feature_i] < tree.threshold
-
-            Xy_oob1 = Xy_oob[split_idxs]
-            Xy_oob2 = Xy_oob[split_idxs == 0]
-                
-            self.calculate_oobr2(Xy_oob=Xy_oob1, tree=tree.true_branch)
-            self.calculate_oobr2(Xy_oob=Xy_oob2, tree=tree.false_branch)
-        return tree
-    
-    def _feature_mapping(self, x, tree=None, mapping=None):
-        """ Do a recursive search down the tree and make a prediction of the data sample by the
-            value of the leaf that we end up at """
-        if tree is None and mapping is None:
-            mapping = []
-            tree = self.root
-
-        if tree.true_branch is None:
-            return
-
-        denom = np.sqrt(tree.true_branch.num_samples * tree.false_branch.num_samples)
-        feature_value = x[tree.feature_i]
-
-        num = -1 * tree.true_branch.num_samples
-        branch = tree.false_branch
-        if isinstance(feature_value, int) or isinstance(feature_value, float):
-            if feature_value < tree.threshold:
-                num = tree.false_branch.num_samples
-                branch = tree.true_branch
-        elif feature_value == tree.threshold:
-            num = tree.false_branch.num_samples
-            branch = tree.true_branch
-            
-        mapping.append(num/denom)
-        
-        self._feature_mapping(x, tree = branch, mapping = mapping)
-
-        return mapping
-    
-    def feature_mapping(self, X):
-        if len(X.shape) == 1:
-            X = X.reshape(1, -1)
-        X = np.concatenate((np.ones(X.shape), X), axis = 1)
-        full = []
-        for i in range(X.shape[0]):
-            m = self._feature_mapping(X[i])
-            temp = np.zeros(self.max_depth+1)
-            temp[:len(m)] = m
-            full.append(temp)
-        return np.array(full)
-
-    def _shrink_tree(self, tree=None, local=None, parent_val=None, parent_beta=None, parent_num=None, cum_sum=0, cum_beta = np.array([])):
-        
-        if tree is None and len(cum_beta) == 0:
+        if tree is None and len(cum_beta) == 0 and depth is None:
             tree = self.root
             cum_beta = np.zeros_like(tree.beta)
+            depth = 0
         is_leaf = tree.true_branch is None
         n_samples = tree.num_samples
         val = tree.value.copy()
         beta = tree.beta.copy()
-        if parent_val is None and parent_beta is None and parent_num is None:
+        
+        if (parent_val is None and parent_beta is None and parent_num is None) or (depth < self.depth_shrink):
             cum_sum = val
             cum_beta = beta
         else:
@@ -306,8 +245,8 @@ class LinearTree(object):
                 denom *= tree.r2
             if local == "oobr2":
                 denom *= tree.oobr2
-            val_new = (val - parent_val)/(1 + self.shrink_lam / denom)
-            beta_new = (beta - parent_beta)/(1 + self.shrink_lam / denom) #beta, beta_new should be px1
+            val_new = (val - parent_val)/(1 + self.lam / denom)
+            beta_new = (beta - parent_beta)/(1 + self.lam / denom) #beta, beta_new should be px1
             cum_sum += val_new
             cum_beta += beta_new
 
@@ -315,8 +254,8 @@ class LinearTree(object):
         tree.beta = cum_beta
 
         if not is_leaf:
-            self._shrink_tree(tree=tree.true_branch, local=local, parent_val=val, parent_beta=beta, parent_num=n_samples, cum_sum=cum_sum.copy(), cum_beta=cum_beta.copy())
-            self._shrink_tree(tree=tree.false_branch, local=local, parent_val=val, parent_beta=beta, parent_num=n_samples, cum_sum=cum_sum.copy(), cum_beta=cum_beta.copy())
+            self._shrink_tree(tree=tree.true_branch, local=local, parent_val=val, parent_beta=beta, parent_num=n_samples, cum_sum=cum_sum.copy(), cum_beta=cum_beta.copy(), depth=depth+1)
+            self._shrink_tree(tree=tree.false_branch, local=local, parent_val=val, parent_beta=beta, parent_num=n_samples, cum_sum=cum_sum.copy(), cum_beta=cum_beta.copy(), depth=depth+1)
         return tree
 
     def print_tree(self, tree=None, indent=" "):
