@@ -60,6 +60,7 @@ class LinearTree(object):
         self.sample_indices = None
     
     def solve(self, X, y):
+        print(X.shape,y.shape)
         return np.linalg.inv(X.T@X + self.alpha * np.eye(X.shape[1])) @ X.T @ y
 
     def gauss_update(self, Xy, beta, V_t = None, add=True, R_init=None):
@@ -92,11 +93,11 @@ class LinearTree(object):
         #return np.sum((y.reshape(-1, ) - (X @ beta).reshape(-1, ))**2)
 
     def fit(self, X, y, loss=None):
-        
-        X = X.reshape(-1, 1)
+        if len(X.shape) == 1:
+            X = X.reshape(-1, 1)
         y = y.reshape(-1, 1)
         
-        X = np.concatenate((np.ones(X.shape), X), axis = 1)
+        X = np.concatenate((np.ones(X.shape[0]).reshape(-1, 1), X), axis = 1)
         
         cur_beta = self.solve(X, y)
         cur_rss = self.rss(X, y, cur_beta)
@@ -219,7 +220,8 @@ class LinearTree(object):
 
     def predict(self, X, linear_honesty = False):
         """ Classify samples one by one and return the set of labels """
-        X = X.reshape(-1, 1)
+        if len(X.shape) == 1:
+            X = X.reshape(-1, 1)
         X = np.concatenate((np.ones(X.shape[0]).reshape(-1, 1), X), axis = 1)
         #print('individ predicts')
         y_pred = [self.predict_value(sample, linear_honesty = linear_honesty) for sample in X]
@@ -236,7 +238,7 @@ class LinearTree(object):
         val = tree.value.copy()
         beta = tree.beta.copy()
         
-        if (parent_val is None and parent_beta is None and parent_num is None) or (depth < self.depth_shrink):
+        if (parent_val is None and parent_beta is None and parent_num is None) or (depth <= self.depth_shrink):
             cum_sum = val
             cum_beta = beta
         else:

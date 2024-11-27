@@ -7,7 +7,7 @@ from sklearn.model_selection import GridSearchCV
 from sklearn.model_selection import KFold
 from sklearn.metrics import r2_score
 
-from kernels import exp_kernel, abs_kernel
+from models.kernels import exp_kernel, abs_kernel
 
 class kwPWRidgeRegressor:
     def __init__(self, alpha=0, bandwidth=None, kernel_func = exp_kernel):
